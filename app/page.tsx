@@ -18,6 +18,16 @@ const ACTIVE_FPS = 120;
 const IDLE_FPS = 30;
 const IDLE_AFTER_MS = 1200;
 
+// Xmax x2.0 input: ~0.6–1.28 MP per frame, 32-aligned, 24 fps (the SDK's own camera default).
+// Sending more (e.g. 4K/120fps) only adds encode + upload latency; the model can't use it.
+const XMAX_MAX_PIXELS = 1472 * 832;
+const XMAX_FPS = 24;
+
+// Xmax's recommended preset prompts (docs: Best Practices → Prompting by mode).
+// Their docs say to use the Chinese prompt exactly — it gives the most reliable, realistic results.
+const XMAX_CHARX_PROMPT = "视频中角色替换成参考图中角色"; // "Replace the character in the video with the one in the reference image"
+const XMAX_FREE_PROMPT = "Keep the person looking natural and photorealistic";
+
 const CREDITS_PER_FRAME = 2;
 const COST_PER_1000 = 10;
 
@@ -30,8 +40,8 @@ export default function Page() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rtcRef = useRef<any>(null);
   const clientRef = useRef<ReturnType<typeof createXmaxClient> | null>(null);
-  // Xmax needs a remote URL for the reference image; cache the uploaded URL per data URL
-  const refImageUploadRef = useRef<{ dataUrl: string; url: string } | null>(null);
+  // Xmax needs a remote URL for the reference image; cache the upload per data URL
+  const refImageUploadRef = useRef<{ dataUrl: string; url: Promise<string> } | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   // audio refs (for lipsync)
@@ -111,12 +121,19 @@ export default function Page() {
     if (!faceImage || !clientRef.current) return null;
     if (refImageUploadRef.current?.dataUrl === faceImage) return refImageUploadRef.current.url;
 
-    const blob = await (await fetch(faceImage)).blob();
-    const file = new File([blob], "reference" + (blob.type === "image/png" ? ".png" : ".jpg"), {
-      type: blob.type || "image/jpeg"
-    });
-    const { url } = await clientRef.current.files.uploadImage(file);
+    const client = clientRef.current;
+    const url = (async () => {
+      const blob = await (await fetch(faceImage)).blob();
+      const file = new File([blob], "reference" + (blob.type === "image/png" ? ".png" : ".jpg"), {
+        type: blob.type || "image/jpeg"
+      });
+      return (await client.files.uploadImage(file)).url;
+    })();
     refImageUploadRef.current = { dataUrl: faceImage, url };
+    // drop a failed upload from the cache so the next attempt retries
+    url.catch(() => {
+      if (refImageUploadRef.current?.url === url) refImageUploadRef.current = null;
+    });
     return url;
   };
 
@@ -206,58 +223,6 @@ export default function Page() {
     audioMeterRafRef.current = requestAnimationFrame(tick);
   };
 
-  /* ===================== IDENTITY RECONSTRUCTION PROMPT ===================== */
-  const buildIdentityReconstructionPrompt = () => {
-    const hasRef = !!faceImage;
-
-    return `
-You are doing REALTIME IDENTITY RECONSTRUCTION WITH MAXIMUM-ACCURACY AUDIO LIPSYNC.
-
-PRIMARY GOAL:
-- Make the output person match the uploaded reference image identity as closely as possible.
-- If a reference image is provided, it is the PRIMARY identity source. The live camera is only for motion/expressions.
-
-LIPSYNC (TOP PRIORITY WHEN AUDIO PRESENT):
-- Use the incoming microphone audio to drive mouth shapes and timing with maximum accuracy.
-- Strong, clear visemes: open/close, lip rounding, jaw drop, lip press, teeth visibility when appropriate.
-- Minimize latency: mouth movement must track audio immediately.
-- When audio is silent, keep mouth naturally closed/relaxed (no idle lip movement).
-- Do not dampen mouth motion with smoothing—keep it responsive.
-
-IDENTITY (HIGHEST PRIORITY):
-- Reconstruct facial identity to match the reference image: facial proportions, bone structure, eyes, nose, lips, jawline, cheeks, eyebrows, hairline.
-- Match skin tone and undertone from the reference image.
-- Match hairstyle, hair color, hair volume, and hair silhouette from the reference image.
-- Match head shape and overall silhouette from the reference image.
-- Keep identity stable across frames—no drift.
-
-LOCKS / STABILITY:
-- Face identity strength ${faceStrength}%.
-- Body stability ${bodyStability}%.
-- Motion smoothness ${motionSmoothness}%.
-${faceLock ? "- Lock face identity strongly (no drift)." : ""}
-${hairLock ? "- Lock hair strongly (no drift)." : ""}
-${bodyLock ? "- Lock body, hands, fingers, and overall silhouette strongly (stable)." : ""}
-
-MOTION:
-- Preserve natural expressions and timing from the live camera.
-- Preserve head movement and eye gaze direction from the live camera.
-- Keep motion responsive and smooth—no laggy smoothing.
-
-QUALITY:
-- Maximum detail, clean edges, natural skin texture (no plastic).
-- No flicker, no warping, no melting.
-
-FRAMING / GEOMETRY:
-- Do not crop. Do not zoom. Do not change framing.
-- Output must match the input frame exactly (no scaling artifacts, no aspect changes).
-- Keep normal framing (ROI ${ROI.toFixed(2)}).
-
-REFERENCE IMAGE:
-- ${hasRef ? "Reference image is provided—use it as the PRIMARY identity source." : "No reference image provided—enhance and stabilize the live identity only."}
-`;
-  };
-
   const cost = useMemo(() => {
     return ((framesSent * CREDITS_PER_FRAME) / 1000) * COST_PER_1000;
   }, [framesSent]);
@@ -337,32 +302,18 @@ REFERENCE IMAGE:
     setEnhancementState("applying");
 
     try {
-      const base = buildIdentityReconstructionPrompt();
-
-      const prompt =
-        mode === "micro"
-          ? base +
-            `
-MICRO-BOOST:
-- Reinforce identity lock and reduce drift.
-- Keep motion responsive; do not over-smooth.
-- Keep lipsync extremely tight and accurate.
-`
-          : mode === "reanchor"
-          ? base +
-            `
-RE-ANCHOR:
-- Re-anchor identity HARD to the reference image.
-- Override any drift immediately.
-- Prioritize reference identity over live identity.
-- Keep lipsync extremely tight and accurate.
-`
-          : base;
-
-      await rtcRef.current.set({
-        prompt,
+      const context = {
+        prompt: faceImage ? XMAX_CHARX_PROMPT : XMAX_FREE_PROMPT,
         refImageUrl: await getRefImageUrl()
-      });
+      };
+
+      // Re-anchor starts a fresh generation task (clears accumulated drift);
+      // other modes update the running task in place.
+      if (mode === "reanchor") {
+        await rtcRef.current.start(context);
+      } else {
+        await rtcRef.current.set(context);
+      }
 
       setEnhancementState("active");
       setLastAppliedAt(Date.now());
@@ -501,11 +452,16 @@ RE-ANCHOR:
     // Read actual input settings (for exact output)
     const inTrack = webcam.getVideoTracks()[0];
     const inSettings = inTrack.getSettings();
-    const WIDTH = (inSettings.width || RESOLUTIONS[resolution].w) as number;
-    const HEIGHT = (inSettings.height || RESOLUTIONS[resolution].h) as number;
+    const inW = (inSettings.width || RESOLUTIONS[resolution].w) as number;
+    const inH = (inSettings.height || RESOLUTIONS[resolution].h) as number;
+
+    // Downscale to Xmax's max input size (keeping aspect ratio), aligned to multiples of 32
+    const scale = Math.min(1, Math.sqrt(XMAX_MAX_PIXELS / (inW * inH)));
+    const WIDTH = Math.max(32, Math.floor((inW * scale) / 32) * 32);
+    const HEIGHT = Math.max(32, Math.floor((inH * scale) / 32) * 32);
 
     const inputFps = (inSettings.frameRate || 30) as number;
-    const OUT_FPS = matchInputEnabled ? inputFps : ACTIVE_FPS;
+    const OUT_FPS = Math.min(XMAX_FPS, matchInputEnabled ? inputFps : ACTIVE_FPS);
 
     setActualOutW(WIDTH);
     setActualOutH(HEIGHT);
@@ -528,34 +484,7 @@ RE-ANCHOR:
 
     const virtualStream = new MediaStream([videoTrack, audioTrack]);
 
-    const client = createXmaxClient({
-      apiKey: apiKey.trim()
-    });
-    clientRef.current = client;
-
-    // autoStart off: applyEnhancement() below sets the prompt/reference image, which starts generation
-    rtcRef.current = await client.realtime.connect(virtualStream, {
-      model,
-      autoStart: false,
-      onRemoteStream: (remote: MediaStream) => {
-        if (outputVideo.current) {
-          outputVideo.current.srcObject = remote;
-          outputVideo.current.play();
-        }
-      },
-      onError: (message: string) => {
-        setLastError(message);
-      }
-    });
-
-    setStatus("live");
-
-    await applyEnhancement("normal");
-    if (faceImage) {
-      await applyEnhancement("reanchor");
-    }
-
-    // FULL FRAME DRAW (no crop, no zoom). Output matches input frame exactly when Match input is ON.
+    // FULL FRAME DRAW (no crop, no zoom), scaled down to the Xmax input size.
     const draw = (now: number) => {
       if (!inputVideo.current) return;
 
@@ -572,8 +501,7 @@ RE-ANCHOR:
       if (!shouldThrottle || now - lastDrawAtRef.current >= minInterval) {
         const t0 = performance.now();
 
-        // ✅ exact frame: draw the full input frame into same-sized canvas (no crop)
-        // When Match input is ON, WIDTH/HEIGHT == input settings, so this is 1:1.
+        // draw the full input frame (no crop) into the Xmax-sized canvas
       //  @ts-ignore
         ctx.drawImage(v, 0, 0, WIDTH, HEIGHT);
 
@@ -598,6 +526,37 @@ RE-ANCHOR:
     };
 
     inputVideo.current!.requestVideoFrameCallback(draw);
+
+    // Connect after the draw loop is running so Xmax receives frames immediately
+    const client = createXmaxClient({
+      apiKey: apiKey.trim()
+    });
+    clientRef.current = client;
+    refImageUploadRef.current = null;
+
+    // Upload the reference image while the session connects
+    getRefImageUrl().catch(() => {});
+
+    // autoStart off: applyEnhancement() below sets the prompt/reference image, which starts generation
+    rtcRef.current = await client.realtime.connect(virtualStream, {
+      model,
+      autoStart: false,
+      stream: { width: WIDTH, height: HEIGHT, fps: OUT_FPS },
+      onRemoteStream: (remote: MediaStream) => {
+        if (outputVideo.current) {
+          outputVideo.current.srcObject = remote;
+          outputVideo.current.play();
+        }
+      },
+      onError: (message: string) => {
+        setLastError(message);
+      }
+    });
+
+    setStatus("live");
+
+    // Sets the prompt + reference image, which starts generation
+    await applyEnhancement("normal");
   };
 
   const stop = () => {
