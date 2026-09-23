@@ -1,27 +1,48 @@
 {
-  "name": "decart-live",
+  "name": "droopy-studio",
   "version": "0.1.0",
   "private": true,
+  "main": "electron.js",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "electron": ".\\node_modules\\.bin\\electron.cmd electron.js",
+    "dist": "npm run build && electron-builder"
   },
   "dependencies": {
-    "next": "16.1.6",
-    "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "@xmaxai/sdk-global": "^1.1.13",
+    "next": "14.1.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "babel-plugin-react-compiler": "1.0.0",
-    "eslint": "^9",
-    "eslint-config-next": "16.1.6",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "@types/react": "19.2.14",
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3",
+    "typescript": "5.9.3"
+  },
+  "build": {
+    "appId": "com.droopystudio.app.v2",
+    "productName": "Droopy Studio",
+    "files": [
+      "electron.js",
+      "app/**/*",
+      "components/**/*",
+      "public/**/*",
+      ".next/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": "portable",
+      "icon": "public/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }
