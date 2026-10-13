@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createXmaxClient, models } from "@xmaxai/sdk-global";
+import VoiceChanger from "../components/VoiceChanger";
 
 /* ===================== CONFIG ===================== */
 const RESOLUTIONS = {
@@ -932,6 +933,9 @@ export default function Page() {
                 </div>
               </div>
             </div>
+
+            {/* Voice changer */}
+            <VoiceChanger styles={styles} />
 
             {/* Video */}
             <div style={styles.section}>
