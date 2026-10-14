@@ -117,6 +117,23 @@ export default function Page() {
   const model = models.realtime("x2.0");
 
   /* ===================== UTIL ===================== */
+  // Turn an XmaxSdkError into a readable message with the details that identify the cause
+  const describeXmaxError = (e: unknown, fallback: string) => {
+    const err = e as { code?: string; message?: string; details?: Record<string, unknown> } | undefined;
+    const d = err?.details || {};
+    const parts = [
+      err?.code,
+      d.failure_stage && `stage: ${d.failure_stage}`,
+      d.failure_type && `type: ${d.failure_type}`,
+      d.http_status && `HTTP ${d.http_status}`,
+      d.business_code && `code: ${d.business_code}`,
+      d.reason_code && `reason: ${d.reason_code}`,
+      d.rtc_error_code && `rtc: ${d.rtc_error_code}`
+    ].filter(Boolean);
+    const msg = err?.message || fallback;
+    return parts.length ? `${msg} (${parts.join(", ")})` : msg;
+  };
+
   // Upload the face image (a data URL) to Xmax and return its remote URL.
   const getRefImageUrl = async (): Promise<string | null> => {
     if (!faceImage || !clientRef.current) return null;
@@ -539,20 +556,27 @@ export default function Page() {
     getRefImageUrl().catch(() => {});
 
     // autoStart off: applyEnhancement() below sets the prompt/reference image, which starts generation
-    rtcRef.current = await client.realtime.connect(virtualStream, {
-      model,
-      autoStart: false,
-      stream: { width: WIDTH, height: HEIGHT, fps: OUT_FPS },
-      onRemoteStream: (remote: MediaStream) => {
-        if (outputVideo.current) {
-          outputVideo.current.srcObject = remote;
-          outputVideo.current.play();
+    try {
+      rtcRef.current = await client.realtime.connect(virtualStream, {
+        model,
+        autoStart: false,
+        stream: { width: WIDTH, height: HEIGHT, fps: OUT_FPS },
+        onRemoteStream: (remote: MediaStream) => {
+          if (outputVideo.current) {
+            outputVideo.current.srcObject = remote;
+            outputVideo.current.play();
+          }
+        },
+        onError: (message: string, error?: unknown) => {
+          setLastError(describeXmaxError(error, message));
         }
-      },
-      onError: (message: string) => {
-        setLastError(message);
-      }
-    });
+      });
+    } catch (e) {
+      // Show the reason in the app instead of the dev error overlay, and release the camera/mic
+      stop();
+      setLastError(describeXmaxError(e, "Could not connect to Xmax."));
+      return;
+    }
 
     setStatus("live");
 
