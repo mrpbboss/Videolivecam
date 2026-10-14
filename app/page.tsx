@@ -60,6 +60,7 @@ export default function Page() {
 
   /* ---------- UI STATE ---------- */
   const [status, setStatus] = useState<"idle" | "live">("idle");
+  const [connecting, setConnecting] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
   /* ---------- CAMERA ---------- */
@@ -418,8 +419,25 @@ export default function Page() {
   }, [adaptiveFpsEnabled, lastMotionAt]);
 
   /* ===================== START / STOP ===================== */
+  // Wraps startSession so any failure (camera, mic, network) shows a message instead of doing nothing
   const start = async () => {
-    if (!selectedCam || status === "live") return;
+    if (status === "live" || connecting) return;
+    if (!selectedCam) {
+      setLastError("No camera selected. Pick a camera at the top of the panel.");
+      return;
+    }
+    setConnecting(true);
+    try {
+      await startSession(selectedCam);
+    } catch (e) {
+      stop();
+      setLastError(describeXmaxError(e, "Could not start. Check your camera, microphone and internet connection."));
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const startSession = async (camId: string) => {
     if (!apiKey.trim()) {
       setLastError("Please enter your API key before starting.");
       return;
@@ -451,9 +469,9 @@ export default function Page() {
     // Request camera. If matchInputEnabled, do NOT force width/height/fps—browser gives native.
     const webcam = await navigator.mediaDevices.getUserMedia({
       video: matchInputEnabled
-        ? { deviceId: { exact: selectedCam } }
+        ? { deviceId: { exact: camId } }
         : {
-            deviceId: { exact: selectedCam },
+            deviceId: { exact: camId },
             width: RESOLUTIONS[resolution].w,
             height: RESOLUTIONS[resolution].h
           },
@@ -556,27 +574,20 @@ export default function Page() {
     getRefImageUrl().catch(() => {});
 
     // autoStart off: applyEnhancement() below sets the prompt/reference image, which starts generation
-    try {
-      rtcRef.current = await client.realtime.connect(virtualStream, {
-        model,
-        autoStart: false,
-        stream: { width: WIDTH, height: HEIGHT, fps: OUT_FPS },
-        onRemoteStream: (remote: MediaStream) => {
-          if (outputVideo.current) {
-            outputVideo.current.srcObject = remote;
-            outputVideo.current.play();
-          }
-        },
-        onError: (message: string, error?: unknown) => {
-          setLastError(describeXmaxError(error, message));
+    rtcRef.current = await client.realtime.connect(virtualStream, {
+      model,
+      autoStart: false,
+      stream: { width: WIDTH, height: HEIGHT, fps: OUT_FPS },
+      onRemoteStream: (remote: MediaStream) => {
+        if (outputVideo.current) {
+          outputVideo.current.srcObject = remote;
+          outputVideo.current.play();
         }
-      });
-    } catch (e) {
-      // Show the reason in the app instead of the dev error overlay, and release the camera/mic
-      stop();
-      setLastError(describeXmaxError(e, "Could not connect to Xmax."));
-      return;
-    }
+      },
+      onError: (message: string, error?: unknown) => {
+        setLastError(describeXmaxError(error, message));
+      }
+    });
 
     setStatus("live");
 
@@ -842,10 +853,11 @@ export default function Page() {
               <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
                 <button
                   onClick={status === "idle" ? start : stop}
-                  style={{ ...styles.btn(status === "idle" ? "primary" : "danger"), flex: 1 }}
+                  style={{ ...styles.btn(status === "idle" ? "primary" : "danger"), flex: 1, opacity: connecting ? 0.7 : 1 }}
                   type="button"
+                  disabled={connecting}
                 >
-                  {status === "idle" ? "Start" : "Stop"}
+                  {connecting ? "Connecting…" : status === "idle" ? "Start" : "Stop"}
                 </button>
 
                 <button
@@ -857,6 +869,10 @@ export default function Page() {
                   Apply
                 </button>
               </div>
+
+              {lastError && (
+                <div style={{ marginTop: 8, fontSize: 12, color: "#fca5a5", fontWeight: 800 }}>{lastError}</div>
+              )}
 
               <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <span style={styles.pill}>WebRTC output</span>
