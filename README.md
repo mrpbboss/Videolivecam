@@ -30,7 +30,9 @@ A desktop app (Electron + Next.js) that turns your webcam into a live AI video f
 
 ## Running the app
 
-Double-click **`start.bat`**, or run:
+Double-click **`start.bat`**. It checks that Node.js is installed, installs the packages automatically on first run (so step 2 is optional), warns if port 3000 is busy, and then opens the app. Keep its window open while you use the app.
+
+Or run it manually:
 
 ```bash
 npm run electron
@@ -75,7 +77,7 @@ This builds the app and packages it with `electron-builder`. Output goes to `dis
 | `app/page.tsx` | Main app UI and the Xmax realtime connection |
 | `app/key/` | API key entry page |
 | `electron.js` | Electron entry point — starts Next.js and opens the window |
-| `start.bat` | One-click launcher for Windows |
+| `start.bat` | One-click launcher for Windows (checks Node, installs packages, starts the app) |
 
 ## Links
 
