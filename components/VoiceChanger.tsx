@@ -94,11 +94,20 @@ const concat = (chunks: Float32Array[]) => {
 
 const apiError = async (res: Response) => {
   let detail = "";
+  let status = "";
   try {
     const j = await res.json();
-    detail = j?.detail?.message || j?.detail?.status || (typeof j?.detail === "string" ? j.detail : "");
+    status = typeof j?.detail?.status === "string" ? j.detail.status : "";
+    detail = j?.detail?.message || status || (typeof j?.detail === "string" ? j.detail : "");
   } catch {}
-  if (res.status === 401) return "ElevenLabs rejected the API key.";
+  // ElevenLabs uses 401 for several problems; name the common ones
+  if (res.status === 401) {
+    if (status === "missing_permissions" || /permission/i.test(detail))
+      return `This API key is missing a permission (${detail || status}). Edit the key on elevenlabs.io: set "Speech to Speech" to Access and "Voices" to Write.`;
+    if (status === "quota_exceeded" || /quota|credits/i.test(detail))
+      return `Out of ElevenLabs credits, or the key's credit limit was reached (${detail || status}).`;
+    return `ElevenLabs rejected the API key${detail ? `: ${detail}` : ""}. Check it was copied in full.`;
+  }
   return `ElevenLabs error ${res.status}${detail ? `: ${detail}` : ""}`;
 };
 
